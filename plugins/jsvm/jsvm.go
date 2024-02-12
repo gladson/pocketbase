@@ -9,8 +9,10 @@
 package jsvm
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -77,6 +79,9 @@ type Config struct {
 	// TypeScript declarations file.
 	//
 	// If not set it fallbacks to "pb_data".
+	//
+	// Note: Avoid using the same directory as the HooksDir when HooksWatch is enabled
+	// to prevent unnecessary app restarts when the types file is initially created.
 	TypesDir string
 }
 
@@ -117,17 +122,16 @@ func Register(app core.App, config Config) error {
 	}
 
 	p.app.OnAfterBootstrap().Add(func(e *core.BootstrapEvent) error {
-		// always update the app types on start to ensure that
-		// the user has the latest generated declarations
-		if err := p.saveTypesFile(); err != nil {
-			color.Yellow("Unable to save app types file: %v", err)
+		// ensure that the user has the latest types declaration
+		if err := p.refreshTypesFile(); err != nil {
+			color.Yellow("Unable to refresh app types file: %v", err)
 		}
 
 		return nil
 	})
 
 	if err := p.registerMigrations(); err != nil {
-		return fmt.Errorf("registerHooks: %w", err)
+		return fmt.Errorf("registerMigrations: %w", err)
 	}
 
 	if err := p.registerHooks(); err != nil {
@@ -161,12 +165,9 @@ func (p *plugin) registerMigrations() error {
 		dbxBinds(vm)
 		tokensBinds(vm)
 		securityBinds(vm)
-		// note: disallow for now and give the authors of custom SaaS offerings
-		// 		 some time to adjust their code to avoid eventual security issues
-		//
-		// osBinds(vm)
-		// filepathBinds(vm)
-		// httpClientBinds(vm)
+		osBinds(vm)
+		filepathBinds(vm)
+		httpClientBinds(vm)
 
 		vm.Set("migrate", func(up, down func(db dbx.Builder) error) {
 			m.AppMigrations.Register(up, down, file)
@@ -236,6 +237,7 @@ func (p *plugin) registerHooks() error {
 		requireRegistry.Enable(vm)
 		console.Enable(vm)
 		process.Enable(vm)
+
 		baseBinds(vm)
 		dbxBinds(vm)
 		filesystemBinds(vm)
@@ -246,6 +248,8 @@ func (p *plugin) registerHooks() error {
 		httpClientBinds(vm)
 		formsBinds(vm)
 		apisBinds(vm)
+		mailsBinds(vm)
+
 		vm.Set("$app", p.app)
 		vm.Set("$template", templateRegistry)
 		vm.Set("__hooks", absHooksDir)
@@ -423,8 +427,8 @@ func (p *plugin) relativeTypesPath(basepath string) string {
 	return rel
 }
 
-// saveTypesFile saves the embedded TS declarations as a file on the disk.
-func (p *plugin) saveTypesFile() error {
+// refreshTypesFile saves the embedded TS declarations as a file on the disk.
+func (p *plugin) refreshTypesFile() error {
 	fullPath := p.fullTypesPath()
 
 	// ensure that the types directory exists
@@ -439,11 +443,20 @@ func (p *plugin) saveTypesFile() error {
 		return err
 	}
 
-	if err := os.WriteFile(fullPath, data, 0644); err != nil {
-		return err
+	// read the first timestamp line of the old file (if exists) and compare it to the embedded one
+	// (note: ignore errors to allow always overwriting the file if it is invalid)
+	existingFile, err := os.Open(fullPath)
+	if err == nil {
+		timestamp := make([]byte, 13)
+		io.ReadFull(existingFile, timestamp)
+		existingFile.Close()
+
+		if len(data) >= len(timestamp) && bytes.Equal(data[:13], timestamp) {
+			return nil // nothing new to save
+		}
 	}
 
-	return nil
+	return os.WriteFile(fullPath, data, 0644)
 }
 
 // prependToEmptyFile prepends the specified text to an empty file.

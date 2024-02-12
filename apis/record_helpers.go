@@ -3,6 +3,7 @@ package apis
 import (
 	"fmt"
 	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -13,15 +14,19 @@ import (
 	"github.com/pocketbase/pocketbase/models"
 	"github.com/pocketbase/pocketbase/resolvers"
 	"github.com/pocketbase/pocketbase/tokens"
+	"github.com/pocketbase/pocketbase/tools/inflector"
 	"github.com/pocketbase/pocketbase/tools/rest"
 	"github.com/pocketbase/pocketbase/tools/search"
 )
 
 const ContextRequestInfoKey = "requestInfo"
 
+const expandQueryParam = "expand"
+const fieldsQueryParam = "fields"
+
 // Deprecated: Use RequestInfo instead.
 func RequestData(c echo.Context) *models.RequestInfo {
-	log.Println("RequestInfo(c) is depracated and will be removed in the future! You can replace it with RequestInfo(c).")
+	log.Println("RequestData(c) is deprecated and will be removed in the future! You can replace it with RequestInfo(c).")
 	return RequestInfo(c)
 }
 
@@ -49,7 +54,7 @@ func RequestInfo(c echo.Context) *models.RequestInfo {
 	// ("X-Token" is converted to "x_token")
 	for k, v := range c.Request().Header {
 		if len(v) > 0 {
-			result.Headers[strings.ToLower(strings.ReplaceAll(k, "-", "_"))] = v[0]
+			result.Headers[inflector.Snakecase(k)] = v[0]
 		}
 	}
 
@@ -72,6 +77,10 @@ func RecordAuthResponse(
 	meta any,
 	finalizers ...func(token string) error,
 ) error {
+	if !authRecord.Verified() && authRecord.Collection().AuthOptions().OnlyVerified {
+		return NewForbiddenError("Please verify your email first.", nil)
+	}
+
 	token, tokenErr := tokens.NewRecordAuthToken(app, authRecord)
 	if tokenErr != nil {
 		return NewBadRequestError("Failed to create auth token.", tokenErr)
@@ -104,8 +113,8 @@ func RecordAuthResponse(
 				expands,
 				expandFetch(app.Dao(), &requestInfo),
 			)
-			if len(failed) > 0 && app.IsDebug() {
-				log.Println("Failed to expand relations: ", failed)
+			if len(failed) > 0 {
+				app.Logger().Debug("[RecordAuthResponse] Failed to expand relations", slog.Any("errors", failed))
 			}
 		}
 
@@ -131,7 +140,7 @@ func RecordAuthResponse(
 // EnrichRecord parses the request context and enrich the provided record:
 //   - expands relations (if defaultExpands and/or ?expand query param is set)
 //   - ensures that the emails of the auth record and its expanded auth relations
-//     are visibe only for the current logged admin, record owner or record with manage access
+//     are visible only for the current logged admin, record owner or record with manage access
 func EnrichRecord(c echo.Context, dao *daos.Dao, record *models.Record, defaultExpands ...string) error {
 	return EnrichRecords(c, dao, []*models.Record{record}, defaultExpands...)
 }
@@ -139,7 +148,7 @@ func EnrichRecord(c echo.Context, dao *daos.Dao, record *models.Record, defaultE
 // EnrichRecords parses the request context and enriches the provided records:
 //   - expands relations (if defaultExpands and/or ?expand query param is set)
 //   - ensures that the emails of the auth records and their expanded auth relations
-//     are visibe only for the current logged admin, record owner or record with manage access
+//     are visible only for the current logged admin, record owner or record with manage access
 func EnrichRecords(c echo.Context, dao *daos.Dao, records []*models.Record, defaultExpands ...string) error {
 	requestInfo := RequestInfo(c)
 
@@ -304,4 +313,32 @@ func hasAuthManageAccess(
 	_, findErr := dao.FindRecordById(record.Collection().Id, record.Id, ruleFunc)
 
 	return findErr == nil
+}
+
+var ruleQueryParams = []string{search.FilterQueryParam, search.SortQueryParam}
+var adminOnlyRuleFields = []string{"@collection.", "@request."}
+
+// @todo consider moving the rules check to the RecordFieldResolver.
+//
+// checkForAdminOnlyRuleFields loosely checks and returns an error if
+// the provided RequestInfo contains rule fields that only the admin can use.
+func checkForAdminOnlyRuleFields(requestInfo *models.RequestInfo) error {
+	if requestInfo.Admin != nil || len(requestInfo.Query) == 0 {
+		return nil // admin or nothing to check
+	}
+
+	for _, param := range ruleQueryParams {
+		v, _ := requestInfo.Query[param].(string)
+		if v == "" {
+			continue
+		}
+
+		for _, field := range adminOnlyRuleFields {
+			if strings.Contains(v, field) {
+				return NewForbiddenError("Only admins can filter by "+field, nil)
+			}
+		}
+	}
+
+	return nil
 }

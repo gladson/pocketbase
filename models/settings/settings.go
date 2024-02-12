@@ -63,6 +63,9 @@ type Settings struct {
 	InstagramAuth AuthProviderConfig `form:"instagramAuth" json:"instagramAuth"`
 	VKAuth        AuthProviderConfig `form:"vkAuth" json:"vkAuth"`
 	YandexAuth    AuthProviderConfig `form:"yandexAuth" json:"yandexAuth"`
+	PatreonAuth   AuthProviderConfig `form:"patreonAuth" json:"patreonAuth"`
+	MailcowAuth   AuthProviderConfig `form:"mailcowAuth" json:"mailcowAuth"`
+	BitbucketAuth AuthProviderConfig `form:"bitbucketAuth" json:"bitbucketAuth"`
 }
 
 // New creates and returns a new default Settings instance.
@@ -80,6 +83,7 @@ func New() *Settings {
 		},
 		Logs: LogsConfig{
 			MaxDays: 5,
+			LogIp:   true,
 		},
 		Smtp: SmtpConfig{
 			Enabled:  false,
@@ -187,6 +191,15 @@ func New() *Settings {
 		YandexAuth: AuthProviderConfig{
 			Enabled: false,
 		},
+		PatreonAuth: AuthProviderConfig{
+			Enabled: false,
+		},
+		MailcowAuth: AuthProviderConfig{
+			Enabled: false,
+		},
+		BitbucketAuth: AuthProviderConfig{
+			Enabled: false,
+		},
 	}
 }
 
@@ -230,6 +243,9 @@ func (s *Settings) Validate() error {
 		validation.Field(&s.InstagramAuth),
 		validation.Field(&s.VKAuth),
 		validation.Field(&s.YandexAuth),
+		validation.Field(&s.PatreonAuth),
+		validation.Field(&s.MailcowAuth),
+		validation.Field(&s.BitbucketAuth),
 	)
 }
 
@@ -296,6 +312,9 @@ func (s *Settings) RedactClone() (*Settings, error) {
 		&clone.InstagramAuth.ClientSecret,
 		&clone.VKAuth.ClientSecret,
 		&clone.YandexAuth.ClientSecret,
+		&clone.PatreonAuth.ClientSecret,
+		&clone.MailcowAuth.ClientSecret,
+		&clone.BitbucketAuth.ClientSecret,
 	}
 
 	// mask all sensitive fields
@@ -336,6 +355,9 @@ func (s *Settings) NamedAuthProviderConfigs() map[string]AuthProviderConfig {
 		auth.NameInstagram:  s.InstagramAuth,
 		auth.NameVK:         s.VKAuth,
 		auth.NameYandex:     s.YandexAuth,
+		auth.NamePatreon:    s.PatreonAuth,
+		auth.NameMailcow:    s.MailcowAuth,
+		auth.NameBitbucket:  s.BitbucketAuth,
 	}
 }
 
@@ -371,6 +393,12 @@ type SmtpConfig struct {
 	// When set to false StartTLS command is send, leaving the server
 	// to decide whether to upgrade the connection or not.
 	Tls bool `form:"tls" json:"tls"`
+
+	// LocalName is optional domain name or IP address used for the
+	// EHLO/HELO exchange (if not explicitly set, defaults to "localhost").
+	//
+	// This is required only by some SMTP servers, such as Gmail SMTP-relay.
+	LocalName string `form:"localName" json:"localName"`
 }
 
 // Validate makes SmtpConfig validatable by implementing [validation.Validatable] interface.
@@ -393,6 +421,7 @@ func (c SmtpConfig) Validate() error {
 			// validation.When(c.Enabled, validation.Required),
 			validation.In(mailer.SmtpAuthLogin, mailer.SmtpAuthPlain),
 		),
+		validation.Field(&c.LocalName, is.Host),
 	)
 }
 
@@ -494,6 +523,7 @@ type EmailTemplate struct {
 	Body      string `form:"body" json:"body"`
 	Subject   string `form:"subject" json:"subject"`
 	ActionUrl string `form:"actionUrl" json:"actionUrl"`
+	Hidden    bool   `form:"hidden" json:"hidden"`
 }
 
 // Validate makes EmailTemplate validatable by implementing [validation.Validatable] interface.
@@ -577,7 +607,9 @@ func (t EmailTemplate) Resolve(
 // -------------------------------------------------------------------
 
 type LogsConfig struct {
-	MaxDays int `form:"maxDays" json:"maxDays"`
+	MaxDays  int  `form:"maxDays" json:"maxDays"`
+	MinLevel int  `form:"minLevel" json:"minLevel"`
+	LogIp    bool `form:"logIp" json:"logIp"`
 }
 
 // Validate makes LogsConfig validatable by implementing [validation.Validatable] interface.
@@ -596,6 +628,8 @@ type AuthProviderConfig struct {
 	AuthUrl      string `form:"authUrl" json:"authUrl"`
 	TokenUrl     string `form:"tokenUrl" json:"tokenUrl"`
 	UserApiUrl   string `form:"userApiUrl" json:"userApiUrl"`
+	DisplayName  string `form:"displayName" json:"displayName"`
+	PKCE         *bool  `form:"pkce" json:"pkce"`
 }
 
 // Validate makes `ProviderConfig` validatable by implementing [validation.Validatable] interface.
@@ -633,6 +667,14 @@ func (c AuthProviderConfig) SetupProvider(provider auth.Provider) error {
 
 	if c.TokenUrl != "" {
 		provider.SetTokenUrl(c.TokenUrl)
+	}
+
+	if c.DisplayName != "" {
+		provider.SetDisplayName(c.DisplayName)
+	}
+
+	if c.PKCE != nil {
+		provider.SetPKCE(*c.PKCE)
 	}
 
 	return nil

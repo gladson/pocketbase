@@ -19,6 +19,8 @@ import (
 )
 
 func TestRecordQueryWithDifferentCollectionValues(t *testing.T) {
+	t.Parallel()
+
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
@@ -58,6 +60,8 @@ func TestRecordQueryWithDifferentCollectionValues(t *testing.T) {
 }
 
 func TestRecordQueryOneWithRecord(t *testing.T) {
+	t.Parallel()
+
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
@@ -82,6 +86,8 @@ func TestRecordQueryOneWithRecord(t *testing.T) {
 }
 
 func TestRecordQueryAllWithRecordsSlices(t *testing.T) {
+	t.Parallel()
+
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
@@ -143,6 +149,8 @@ func TestRecordQueryAllWithRecordsSlices(t *testing.T) {
 }
 
 func TestFindRecordById(t *testing.T) {
+	t.Parallel()
+
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
@@ -203,6 +211,8 @@ func TestFindRecordById(t *testing.T) {
 }
 
 func TestFindRecordsByIds(t *testing.T) {
+	t.Parallel()
+
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
@@ -294,6 +304,8 @@ func TestFindRecordsByIds(t *testing.T) {
 }
 
 func TestFindRecordsByExpr(t *testing.T) {
+	t.Parallel()
+
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
@@ -364,6 +376,8 @@ func TestFindRecordsByExpr(t *testing.T) {
 }
 
 func TestFindFirstRecordByData(t *testing.T) {
+	t.Parallel()
+
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
@@ -427,6 +441,8 @@ func TestFindFirstRecordByData(t *testing.T) {
 }
 
 func TestFindRecordsByFilter(t *testing.T) {
+	t.Parallel()
+
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
@@ -436,6 +452,8 @@ func TestFindRecordsByFilter(t *testing.T) {
 		filter             string
 		sort               string
 		limit              int
+		offset             int
+		params             []dbx.Params
 		expectError        bool
 		expectRecordIds    []string
 	}{
@@ -445,6 +463,8 @@ func TestFindRecordsByFilter(t *testing.T) {
 			"id != ''",
 			"",
 			0,
+			0,
+			nil,
 			true,
 			nil,
 		},
@@ -454,6 +474,8 @@ func TestFindRecordsByFilter(t *testing.T) {
 			"",
 			"",
 			0,
+			0,
+			nil,
 			true,
 			nil,
 		},
@@ -463,6 +485,8 @@ func TestFindRecordsByFilter(t *testing.T) {
 			"someMissingField > 1",
 			"",
 			0,
+			0,
+			nil,
 			true,
 			nil,
 		},
@@ -472,6 +496,8 @@ func TestFindRecordsByFilter(t *testing.T) {
 			"id != ''",
 			"",
 			0,
+			0,
+			nil,
 			false,
 			[]string{
 				"llvuca81nly1qls",
@@ -485,6 +511,8 @@ func TestFindRecordsByFilter(t *testing.T) {
 			"id != '' && active=true",
 			"-created,title",
 			-1, // should behave the same as 0
+			0,
+			nil,
 			false,
 			[]string{
 				"0yxhwia2amd8gec",
@@ -492,51 +520,83 @@ func TestFindRecordsByFilter(t *testing.T) {
 			},
 		},
 		{
-			"with limit",
+			"with limit and offset",
 			"demo2",
 			"id != ''",
 			"title",
 			2,
+			1,
+			nil,
+			false,
+			[]string{
+				"achvryl401bhse3",
+				"0yxhwia2amd8gec",
+			},
+		},
+		{
+			"with placeholder params",
+			"demo2",
+			"active = {:active}",
+			"",
+			10,
+			0,
+			[]dbx.Params{{"active": false}},
 			false,
 			[]string{
 				"llvuca81nly1qls",
-				"achvryl401bhse3",
+			},
+		},
+		{
+			"with json filter and sort",
+			"demo4",
+			"json_object != null && json_object.a.b = 'test'",
+			"-json_object.a",
+			10,
+			0,
+			[]dbx.Params{{"active": false}},
+			false,
+			[]string{
+				"i9naidtvr6qsgb4",
 			},
 		},
 	}
 
 	for _, s := range scenarios {
-		records, err := app.Dao().FindRecordsByFilter(
-			s.collectionIdOrName,
-			s.filter,
-			s.sort,
-			s.limit,
-		)
+		t.Run(s.name, func(t *testing.T) {
+			records, err := app.Dao().FindRecordsByFilter(
+				s.collectionIdOrName,
+				s.filter,
+				s.sort,
+				s.limit,
+				s.offset,
+				s.params...,
+			)
 
-		hasErr := err != nil
-		if hasErr != s.expectError {
-			t.Errorf("[%s] Expected hasErr to be %v, got %v (%v)", s.name, s.expectError, hasErr, err)
-			continue
-		}
-
-		if hasErr {
-			continue
-		}
-
-		if len(records) != len(s.expectRecordIds) {
-			t.Errorf("[%s] Expected %d records, got %d", s.name, len(s.expectRecordIds), len(records))
-			continue
-		}
-
-		for i, id := range s.expectRecordIds {
-			if id != records[i].Id {
-				t.Errorf("[%s] Expected record with id %q, got %q at index %d", s.name, id, records[i].Id, i)
+			hasErr := err != nil
+			if hasErr != s.expectError {
+				t.Fatalf("[%s] Expected hasErr to be %v, got %v (%v)", s.name, s.expectError, hasErr, err)
 			}
-		}
+
+			if hasErr {
+				return
+			}
+
+			if len(records) != len(s.expectRecordIds) {
+				t.Fatalf("[%s] Expected %d records, got %d", s.name, len(s.expectRecordIds), len(records))
+			}
+
+			for i, id := range s.expectRecordIds {
+				if id != records[i].Id {
+					t.Fatalf("[%s] Expected record with id %q, got %q at index %d", s.name, id, records[i].Id, i)
+				}
+			}
+		})
 	}
 }
 
 func TestFindFirstRecordByFilter(t *testing.T) {
+	t.Parallel()
+
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
@@ -544,6 +604,7 @@ func TestFindFirstRecordByFilter(t *testing.T) {
 		name               string
 		collectionIdOrName string
 		filter             string
+		params             []dbx.Params
 		expectError        bool
 		expectRecordId     string
 	}{
@@ -551,6 +612,7 @@ func TestFindFirstRecordByFilter(t *testing.T) {
 			"missing collection",
 			"missing",
 			"id != ''",
+			nil,
 			true,
 			"",
 		},
@@ -558,6 +620,7 @@ func TestFindFirstRecordByFilter(t *testing.T) {
 			"missing filter",
 			"demo2",
 			"",
+			nil,
 			true,
 			"",
 		},
@@ -565,6 +628,7 @@ func TestFindFirstRecordByFilter(t *testing.T) {
 			"invalid filter",
 			"demo2",
 			"someMissingField > 1",
+			nil,
 			true,
 			"",
 		},
@@ -572,6 +636,7 @@ func TestFindFirstRecordByFilter(t *testing.T) {
 			"valid filter but no matches",
 			"demo2",
 			"id = 'test'",
+			nil,
 			true,
 			"",
 		},
@@ -579,13 +644,22 @@ func TestFindFirstRecordByFilter(t *testing.T) {
 			"valid filter and multiple matches",
 			"demo2",
 			"id != ''",
+			nil,
+			false,
+			"llvuca81nly1qls",
+		},
+		{
+			"with placeholder params",
+			"demo2",
+			"active = {:active}",
+			[]dbx.Params{{"active": false}},
 			false,
 			"llvuca81nly1qls",
 		},
 	}
 
 	for _, s := range scenarios {
-		record, err := app.Dao().FindFirstRecordByFilter(s.collectionIdOrName, s.filter)
+		record, err := app.Dao().FindFirstRecordByFilter(s.collectionIdOrName, s.filter, s.params...)
 
 		hasErr := err != nil
 		if hasErr != s.expectError {
@@ -604,6 +678,8 @@ func TestFindFirstRecordByFilter(t *testing.T) {
 }
 
 func TestCanAccessRecord(t *testing.T) {
+	t.Parallel()
+
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
@@ -771,6 +847,8 @@ func TestCanAccessRecord(t *testing.T) {
 }
 
 func TestIsRecordValueUnique(t *testing.T) {
+	t.Parallel()
+
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
@@ -820,6 +898,8 @@ func TestIsRecordValueUnique(t *testing.T) {
 }
 
 func TestFindAuthRecordByToken(t *testing.T) {
+	t.Parallel()
+
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
@@ -882,6 +962,8 @@ func TestFindAuthRecordByToken(t *testing.T) {
 }
 
 func TestFindAuthRecordByEmail(t *testing.T) {
+	t.Parallel()
+
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
@@ -913,6 +995,8 @@ func TestFindAuthRecordByEmail(t *testing.T) {
 }
 
 func TestFindAuthRecordByUsername(t *testing.T) {
+	t.Parallel()
+
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
@@ -945,6 +1029,8 @@ func TestFindAuthRecordByUsername(t *testing.T) {
 }
 
 func TestSuggestUniqueAuthRecordUsername(t *testing.T) {
+	t.Parallel()
+
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
@@ -982,6 +1068,8 @@ func TestSuggestUniqueAuthRecordUsername(t *testing.T) {
 }
 
 func TestSaveRecord(t *testing.T) {
+	t.Parallel()
+
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
@@ -1015,6 +1103,8 @@ func TestSaveRecord(t *testing.T) {
 }
 
 func TestSaveRecordWithIdFromOtherCollection(t *testing.T) {
+	t.Parallel()
+
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
@@ -1047,6 +1137,8 @@ func TestSaveRecordWithIdFromOtherCollection(t *testing.T) {
 }
 
 func TestDeleteRecord(t *testing.T) {
+	t.Parallel()
+
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 
@@ -1113,17 +1205,19 @@ func TestDeleteRecord(t *testing.T) {
 	}
 	// ensure that the json rel fields were prefixed
 	joinedQueries := strings.Join(calledQueries, " ")
-	expectedRelManyPart := "`demo1` INNER JOIN json_each(CASE WHEN json_valid([[demo1.rel_many]]) THEN [[demo1.rel_many]] ELSE json_array([[demo1.rel_many]]) END)"
+	expectedRelManyPart := "SELECT `demo1`.* FROM `demo1` WHERE EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid([[demo1.rel_many]]) THEN [[demo1.rel_many]] ELSE json_array([[demo1.rel_many]]) END) {{__je__}} WHERE [[__je__.value]]='"
 	if !strings.Contains(joinedQueries, expectedRelManyPart) {
 		t.Fatalf("(rec3) Expected the cascade delete to call the query \n%v, got \n%v", expectedRelManyPart, calledQueries)
 	}
-	expectedRelOnePart := "SELECT DISTINCT `demo1`.* FROM `demo1` WHERE (`demo1`.`rel_one`="
+	expectedRelOnePart := "SELECT `demo1`.* FROM `demo1` WHERE (`demo1`.`rel_one`='"
 	if !strings.Contains(joinedQueries, expectedRelOnePart) {
 		t.Fatalf("(rec3) Expected the cascade delete to call the query \n%v, got \n%v", expectedRelOnePart, calledQueries)
 	}
 }
 
 func TestDeleteRecordBatchProcessing(t *testing.T) {
+	t.Parallel()
+
 	app, _ := tests.NewTestApp()
 	defer app.Cleanup()
 

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/labstack/echo/v5"
 	"github.com/pocketbase/pocketbase/apis"
+	"github.com/pocketbase/pocketbase/core"
 )
 
 // ApiScenario defines a single api request test case/scenario.
@@ -27,6 +29,11 @@ type ApiScenario struct {
 	// to ensure that all fired non-awaited go routines have finished
 	Delay time.Duration
 
+	// Timeout specifies how long to wait before cancelling the request context.
+	//
+	// A zero or negative value means that there will be no timeout.
+	Timeout time.Duration
+
 	// expectations
 	// ---
 	ExpectedStatus     int
@@ -36,9 +43,9 @@ type ApiScenario struct {
 
 	// test hooks
 	// ---
-	TestAppFactory func() (*TestApp, error)
+	TestAppFactory func(t *testing.T) *TestApp
 	BeforeTestFunc func(t *testing.T, app *TestApp, e *echo.Echo)
-	AfterTestFunc  func(t *testing.T, app *TestApp, e *echo.Echo)
+	AfterTestFunc  func(t *testing.T, app *TestApp, res *http.Response)
 }
 
 // Test executes the test scenario.
@@ -53,14 +60,17 @@ func (scenario *ApiScenario) Test(t *testing.T) {
 
 func (scenario *ApiScenario) test(t *testing.T) {
 	var testApp *TestApp
-	var testAppErr error
 	if scenario.TestAppFactory != nil {
-		testApp, testAppErr = scenario.TestAppFactory()
+		testApp = scenario.TestAppFactory(t)
+		if testApp == nil {
+			t.Fatal("TestAppFactory must return a non-nill app instance")
+		}
 	} else {
+		var testAppErr error
 		testApp, testAppErr = NewTestApp()
-	}
-	if testAppErr != nil {
-		t.Fatalf("Failed to initialize the test app instance: %v", testAppErr)
+		if testAppErr != nil {
+			t.Fatalf("Failed to initialize the test app instance: %v", testAppErr)
+		}
 	}
 	defer testApp.Cleanup()
 
@@ -68,6 +78,12 @@ func (scenario *ApiScenario) test(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
+	// manually trigger the serve event to ensure that custom app routes and middlewares are registered
+	testApp.OnBeforeServe().Trigger(&core.ServeEvent{
+		App:    testApp,
+		Router: e,
+	})
 
 	if scenario.BeforeTestFunc != nil {
 		scenario.BeforeTestFunc(t, testApp, e)
@@ -79,9 +95,17 @@ func (scenario *ApiScenario) test(t *testing.T) {
 	// add middleware to timeout long-running requests (eg. keep-alive routes)
 	e.Pre(func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
-			ctx, cancelFunc := context.WithTimeout(c.Request().Context(), 100*time.Millisecond)
-			defer cancelFunc()
-			c.SetRequest(c.Request().Clone(ctx))
+			slowTimer := time.AfterFunc(3*time.Second, func() {
+				t.Logf("[WARN] Long running test %q", scenario.Name)
+			})
+			defer slowTimer.Stop()
+
+			if scenario.Timeout > 0 {
+				ctx, cancelFunc := context.WithTimeout(c.Request().Context(), scenario.Timeout)
+				defer cancelFunc()
+				c.SetRequest(c.Request().Clone(ctx))
+			}
+
 			return next(c)
 		}
 	})
@@ -163,8 +187,7 @@ func (scenario *ApiScenario) test(t *testing.T) {
 		}
 	}
 
-	// @todo consider adding the response body to the AfterTestFunc args
 	if scenario.AfterTestFunc != nil {
-		scenario.AfterTestFunc(t, testApp, e)
+		scenario.AfterTestFunc(t, testApp, res)
 	}
 }
